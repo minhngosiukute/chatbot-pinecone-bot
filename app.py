@@ -1,7 +1,6 @@
 # app.py — FastAPI + Azure OpenAI + Pinecone (trả 1 sp tốt nhất)
 import os
-from typing import Optional
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import AzureOpenAI
@@ -9,7 +8,7 @@ from pinecone import Pinecone
 
 load_dotenv()
 
-# Azure OpenAI
+# ===== Azure OpenAI =====
 client = AzureOpenAI(
     api_key=os.getenv("AZURE_OPENAI_KEY"),
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
@@ -17,7 +16,7 @@ client = AzureOpenAI(
 )
 EMBED_DEPLOY = os.getenv("AZURE_EMBED_DEPLOY", "embedding-deploy")
 
-# Pinecone
+# ===== Pinecone =====
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 INDEX_NAME = os.getenv("PINECONE_INDEX", "products-index")
 index = pc.Index(INDEX_NAME)
@@ -34,36 +33,48 @@ class SearchRequest(BaseModel):
 def search_one(query: str):
     vec = embed(query)
     res = index.query(vector=vec, top_k=1, include_metadata=True)
-    if not res["matches"]:
+    if not res.get("matches"):
         return None
-    m = res["matches"][0]["metadata"]
+    match = res["matches"][0]
+    m = match.get("metadata", {}) or {}
     return {
         "name": m.get("name"),
         "price": m.get("price"),
         "url": m.get("url"),
         "image_url": m.get("image_url"),
-        "score": res["matches"][0]["score"],
+        "score": match.get("score"),
     }
+
+def format_hit(hit: dict) -> str:
+    name = hit.get("name", "Sản phẩm")
+    price = hit.get("price", "—")
+    url = hit.get("url", "")
+    msg = f"Sản phẩm phù hợp nhất: {name}\nGiá: {price} VND"
+    if url:
+        msg += f"\nLink: {url}"
+    return msg
 
 @app.get("/health")
 def health():
     return {"ok": True}
 
+# GET /search?q=... — test nhanh trên trình duyệt
 @app.get("/search")
-def search(q: str = Query(..., description="Câu hỏi/mô tả sản phẩm")):
+def search_get(q: str = Query(..., description="Câu hỏi/mô tả sản phẩm")):
     hit = search_one(q)
     return {"result": hit}
 
-from fastapi import Request
-
+# POST /search — webhook cho Dialogflow
 @app.post("/search")
-async def search(request: Request):
+async def search_webhook(request: Request):
     body = await request.json()
-    query = body.get("queryResult", {}).get("queryText", "")
+    query = body.get("queryResult", {}).get("queryText", "") or ""
 
-    if not query:
-        return {"fulfillmentText": "Tôi không hiểu bạn muốn tìm gì 🧐"}
+    if not query.strip():
+        return {"fulfillmentText": "Mình chưa hiểu bạn muốn tìm gì 🧐"}
 
-    result = find_product(query)
-    return {"fulfillmentText": result}
+    hit = search_one(query)
+    if not hit:
+        return {"fulfillmentText": "Xin lỗi, mình chưa tìm thấy sản phẩm phù hợp."}
 
+    return {"fulfillmentText": format_hit(hit)}
