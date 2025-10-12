@@ -54,7 +54,16 @@ def search(q: str = Query(..., description="Câu hỏi/mô tả sản phẩm")):
     hit = search_one(q)
     return {"result": hit}
 
+from fastapi import Request
+
 @app.post("/search")
-def search_body(req: SearchRequest):
-    hit = search_one(req.query)
-    return {"result": hit}
+async def search(request: Request):
+    body = await request.json()
+    query = body.get("queryResult", {}).get("queryText", "")
+
+    if not query:
+        return {"fulfillmentText": "Tôi không hiểu bạn muốn tìm gì 🧐"}
+
+    result = find_product(query)
+    return {"fulfillmentText": result}
+
