@@ -77,4 +77,27 @@ async def search_webhook(request: Request):
     if not hit:
         return {"fulfillmentText": "Xin lỗi, mình chưa tìm thấy sản phẩm phù hợp."}
 
-    return {"fulfillmentText": format_hit(hit)}
+    # --- Soạn rich message ---
+    name = hit.get("name", "Sản phẩm")
+    price = hit.get("price", "—")
+    url = hit.get("url", "")
+    image_url = hit.get("image_url", "")
+
+    return {
+        "fulfillmentMessages": [
+            {
+                "card": {
+                    "title": name,
+                    "subtitle": f"Giá: {price} VND",
+                    "imageUri": image_url,
+                    "buttons": [
+                        {
+                            "text": "Xem chi tiết",
+                            "postback": url
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
