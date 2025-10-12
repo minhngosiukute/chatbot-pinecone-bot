@@ -64,40 +64,38 @@ def search_get(q: str = Query(..., description="Câu hỏi/mô tả sản phẩm
     hit = search_one(q)
     return {"result": hit}
 
-# POST /search — webhook cho Dialogflow
+# app.py (chỉ phần POST /search)
+from fastapi import Request
+
 @app.post("/search")
 async def search_webhook(request: Request):
     body = await request.json()
-    query = body.get("queryResult", {}).get("queryText", "") or ""
+    query = body.get("queryResult", {}).get("queryText", "")
 
-    if not query.strip():
-        return {"fulfillmentText": "Mình chưa hiểu bạn muốn tìm gì 🧐"}
+    if not query:
+        return {"fulfillmentText": "Tôi không hiểu bạn muốn tìm gì 🧐"}
 
     hit = search_one(query)
     if not hit:
         return {"fulfillmentText": "Xin lỗi, mình chưa tìm thấy sản phẩm phù hợp."}
 
-    # --- Soạn rich message ---
-    name = hit.get("name", "Sản phẩm")
-    price = hit.get("price", "—")
-    url = hit.get("url", "")
-    image_url = hit.get("image_url", "")
+    title = hit["name"] or "Sản phẩm"
+    subtitle = f"Giá: {int(hit['price']):,} VND".replace(",", ".") if hit.get("price") else ""
+    image = hit.get("image_url") or ""
+    url = hit.get("url") or "#"
 
+    # Trả về card để mọi kênh (kể cả Web Demo) render có ảnh + button
     return {
         "fulfillmentMessages": [
             {
                 "card": {
-                    "title": name,
-                    "subtitle": f"Giá: {price} VND",
-                    "imageUri": image_url,
+                    "title": title,
+                    "subtitle": subtitle,
+                    "imageUri": image,
                     "buttons": [
-                        {
-                            "text": "Xem chi tiết",
-                            "postback": url
-                        }
+                        {"text": "XEM CHI TIẾT", "postback": url}
                     ]
                 }
             }
         ]
     }
-
