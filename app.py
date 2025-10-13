@@ -1,4 +1,4 @@
-# app.py — FastAPI + Azure OpenAI + Pinecone (lọc loại & giá + ưu tiên khớp tên)
+# app.py — FastAPI + Azure OpenAI + Pinecone (lọc loại & giá + ưu tiên khớp tên an toàn)
 import os, re, unicodedata
 from typing import Optional, Dict, Any
 
@@ -6,6 +6,7 @@ from fastapi import FastAPI, Query, Request, HTTPException
 from dotenv import load_dotenv
 from openai import AzureOpenAI, APIStatusError, APITimeoutError, APIConnectionError
 from pinecone import Pinecone
+from difflib import SequenceMatcher
 
 # ----------------- Init -----------------
 load_dotenv()
@@ -31,6 +32,15 @@ VN_CATEGORY_ALIASES: Dict[str, set] = {
     "Tranh": {"tranh", "khung tranh", "poster", "canvas"},
     "Hoa và Cây": {"hoa", "cành", "canh", "cây", "cay", "flower", "plant"},
     "Đồng hồ": {"đồng hồ", "dong ho", "clock"},
+}
+
+# Stopwords/fillers khi chat
+STOPWORDS = {
+    "tu", "tư", "van", "vấn", "tu van",
+    "tim", "tìm", "giup", "giúp", "xem", "mua",
+    "cho", "cho minh", "mình", "minh", "can", "cần",
+    "hoi", "hỏi", "gi", "gì", "di", "đi", "cai", "cái",
+    "tu van giup", "goi y", "gợi ý", "tu van mua", "tu van san pham",
 }
 
 def normalize_text(s: str) -> str:
@@ -73,8 +83,7 @@ def parse_price_number(token: str) -> Optional[int]:
 
     if t.isdigit():
         n = int(t)
-        # Người dùng thường gõ '500' = 500k
-        if n < 10_000:
+        if n < 10_000:  # 500 -> 500k
             return n * 1000
         return n
 
@@ -87,7 +96,7 @@ def extract_price_filters(q: str) -> Dict[str, int]:
     """
     nq = normalize_text(q)
 
-    # Khoảng A - B (dạng '700-900k' hoặc 'từ 700 đến 900')
+    # Khoảng A - B
     m = re.search(
         r"(\d[\d\.,]*\s*(?:k|ngan|ngàn|nghìn|tr|triệu|trieu|m)?)\s*(?:-|đến|to)\s*(\d[\d\.,]*\s*(?:k|ngan|ngàn|nghìn|tr|triệu|trieu|m)?)",
         nq,
@@ -112,7 +121,7 @@ def extract_price_filters(q: str) -> Dict[str, int]:
         if val:
             return {"min": val}
 
-    # Chỉ 1 con số → hiểu là "tối đa" con số đó
+    # Chỉ 1 con số → hiểu là "tối đa"
     m = re.search(r"(\d[\d\.,]*\s*(?:k|ngan|ngàn|nghìn|tr|triệu|trieu|m)?)", nq)
     if m:
         val = parse_price_number(m.group(1))
@@ -122,13 +131,6 @@ def extract_price_filters(q: str) -> Dict[str, int]:
     return {}
 
 def build_filter(category: Optional[str], price_filter: Dict[str, int]) -> Dict[str, Any]:
-    """
-    Pinecone filter, ví dụ:
-    {
-      "category": {"$eq": "Bình"},
-      "price": {"$lte": 500000}
-    }
-    """
     f: Dict[str, Any] = {}
     if category:
         f["category"] = {"$eq": category}
@@ -140,9 +142,43 @@ def build_filter(category: Optional[str], price_filter: Dict[str, int]) -> Dict[
         f["price"] = {"$lte": price_filter["max"]}
     return f
 
-# ----- So khớp tên -----
-from difflib import SequenceMatcher
+# ----- Tokens loại (chuẩn hoá) -----
+def _collect_category_tokens():
+    toks = set()
+    for cat, aliases in VN_CATEGORY_ALIASES.items():
+        toks.add(normalize_text(cat))
+        for a in aliases:
+            toks.add(normalize_text(a))
+    # thêm phiên bản bỏ dấu
+    more = set()
+    for t in toks:
+        more.add(re.sub(r"\s+", " ", "".join(
+            ch for ch in unicodedata.normalize("NFD", t) if not unicodedata.combining(ch)
+        )))
+    toks |= more
+    toks = {re.sub(r"\s+", " ", t.strip()) for t in toks}
+    return toks
 
+CATEGORY_TOKENS = _collect_category_tokens()
+
+def is_generic_query(q: str) -> bool:
+    nq = normalize_text(q)
+    if not nq:
+        return True
+    toks = nq.split()
+    # bỏ stopwords
+    toks = [t for t in toks if t not in STOPWORDS]
+    if not toks:
+        return True
+    # nếu mọi token còn lại đều là token loại
+    if all(t in CATEGORY_TOKENS for t in toks):
+        return True
+    # một token rất ngắn và là token loại
+    if len(toks) == 1 and len(toks[0]) <= 5 and toks[0] in CATEGORY_TOKENS:
+        return True
+    return False
+
+# ----- So khớp tên -----
 def strip_accents(s: str) -> str:
     s = "" if s is None else str(s)
     return "".join(ch for ch in unicodedata.normalize("NFD", s) if not unicodedata.combining(ch))
@@ -160,12 +196,15 @@ def name_match_score(q: str, name: str) -> float:
     if not qn or not nn:
         return 0.0
 
-    # chứa trọn vẹn → điểm cao
-    base = 0.95 if (qn in nn or nn in qn) else 0.0
+    qn_tokens = qn.split()
+    # chỉ cộng base cao nếu query đủ đặc trưng (>= 2 token hoặc dài >= 6)
+    if (qn in nn or nn in qn) and (len(qn_tokens) >= 2 or len(qn) >= 6):
+        base = 0.95
+    else:
+        base = 0.0
 
-    # độ giống ký tự + giao hội token
     seq = SequenceMatcher(None, qn, nn).ratio()
-    qtok, ntok = set(qn.split()), set(nn.split())
+    qtok, ntok = set(qn_tokens), set(nn.split())
     jacc = (len(qtok & ntok) / len(qtok | ntok)) if (qtok and ntok) else 0.0
 
     return max(base, (seq * 0.6 + jacc * 0.4))
@@ -228,10 +267,10 @@ def smart_search(q: str, top_k_category: int = 30, top_k_best: int = 10) -> Dict
     category_results = []
     best = None
 
-    # 4) Nếu khớp tên mạnh -> chỉ trả best theo tên (bỏ list theo loại)
-    if strong_name_hit:
+    # 4) Chỉ ưu tiên tên khi KHÔNG phải query chung chung
+    if strong_name_hit and not is_generic_query(q):
         best = best_by_name
-        alternatives = []
+        alternatives = []  # không trả list phụ khi trùng tên mạnh
     else:
         # Có loại → liệt kê theo loại (kết hợp lọc giá nếu có)
         if cat:
@@ -253,7 +292,7 @@ def smart_search(q: str, top_k_category: int = 30, top_k_best: int = 10) -> Dict
         "best_match": best,
         "alternatives": alternatives,
         "name_match_score": round(best_name_score, 3) if best_by_name else 0.0,
-        "used_name_priority": strong_name_hit,
+        "used_name_priority": bool(strong_name_hit and not is_generic_query(q)),
     }
 
 # ----------------- Endpoints -----------------
