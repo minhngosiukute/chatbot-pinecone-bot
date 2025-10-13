@@ -358,7 +358,7 @@ async def search_webhook(request: Request):
             
             # ✅ Dạng thumbnail: ảnh nhỏ nằm trong card
             blocks.append({
-                "type": "info",
+                "type": "card",
                 "title": item.get("name", ""),
                 "subtitle": price_text,
                 "image": { "src": { "rawUrl": item.get("image_url") or "" } },
@@ -379,7 +379,7 @@ async def search_webhook(request: Request):
             {"type": "info", "title": "Gợi ý phù hợp nhất", "subtitle": ""},
             {
                 # ✅ Thumbnail gọn, không còn ảnh full
-                "type": "info",
+                "type": "card",
                 "title": result["best_match"].get("name", ""),
                 "subtitle": price_text,
                 "image": { "src": { "rawUrl": result["best_match"].get("image_url") or "" } },
