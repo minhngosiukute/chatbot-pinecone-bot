@@ -58,26 +58,34 @@ if not os.path.exists(csv_path):
     raise FileNotFoundError(f"Không thấy products.csv: {csv_path}")
 
 batch, total_rows = [], 0
-with open(csv_path, encoding="utf-8") as f:
+
+# MỌI THAO TÁC VỚI reader đều ở trong with
+with open(csv_path, mode="r", encoding="utf-8", newline="") as f:
     reader = csv.DictReader(f)
-    required = {"id", "name", "description", "price", "local_url"}
-    missing = required - set([c.strip() for c in (reader.fieldnames or [])])
+
+    # kiểm tra header
+    headers = [c.strip() for c in (reader.fieldnames or [])]
+    required = {"id", "name", "category", "description", "price", "local_url", "image_url", "category_id", "tags"}
+    missing = required - set(headers)
     if missing:
         raise ValueError(f"CSV thiếu cột: {', '.join(missing)}")
 
+    # duyệt từng dòng
     for row in reader:
         total_rows += 1
-        doc = f"{row['name']} | {row.get('tags','')} | {row['description']}"
+        doc = f"{row['name']} | {row['category']} | {row.get('tags','')} | {row['description']}"
         batch.append({
             "id": str(row["id"]),
             "values": embed(doc),
             "metadata": {
                 "name": row["name"],
-                "description": row.get("description", ""),
+                "category": row["category"],
+                "category_id": row["category_id"],
+                "description": row["description"],
                 "url": row["local_url"],
-                "image_url": row.get("image_url", ""),
-                "price": row.get("price", ""),
-                "tags": row.get("tags", ""),
+                "image_url": row["image_url"],
+                 "price": float(row["price"]),
+                "tags": row["tags"],
             }
         })
 
