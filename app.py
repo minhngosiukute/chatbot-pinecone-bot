@@ -261,3 +261,12 @@ async def search_webhook(request: Request):
         "fulfillmentText": f"{title_best}\n{subtitle_best}\n{(result['best_match'] or {}).get('url', '')}",
         "fulfillmentMessages": [{"payload": payload}] if payload else [],
     }
+@app.get("/")
+def root():
+    return {"ok": True, "try": "/docs", "note": "Dùng POST /search cho webhook"}
+
+@app.get("/search")
+async def search_get(q: str):
+    # Cho test nhanh trên trình duyệt: /search?q=binh buom buom
+    result = smart_search(q)
+    return result  # trả JSON gọn để xem nhanh
