@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from openai import AzureOpenAI, APIStatusError, APITimeoutError, APIConnectionError
 from pinecone import Pinecone
 from difflib import SequenceMatcher
-COMPACT_CARD = os.getenv("COMPACT_CARD", "1") == "1"   # bật mặc định
+
 # ----------------- Init -----------------
 load_dotenv()
 
@@ -339,6 +339,7 @@ async def search_webhook(request: Request):
             subtitle_best = ""
 
     blocks = []
+
     # Nếu có list theo loại -> render trước
     if result["category_results"]:
         header = {
@@ -355,45 +356,21 @@ async def search_webhook(request: Request):
                     price_text = f"Giá: {int(float(item['price'])):,} VND".replace(",", ".")
                 except Exception:
                     price_text = ""
-            
-            # ✅ Dạng thumbnail: ảnh nhỏ nằm trong card
-            blocks.append({
-                "type": "card",
-                "title": item.get("name", ""),
-                "subtitle": price_text,
-                "image": { "src": { "rawUrl": item.get("image_url") or "" } },
-                "actionLink": item.get("url", "")
-            })
+            blocks += [
+                {"type": "image", "rawUrl": item.get("image_url") or "", "accessibilityText": item.get("name", "")},
+                {"type": "info", "title": item.get("name", ""), "subtitle": price_text, "actionLink": item.get("url", "")},
+            ]
 
-    # Best match (gợi ý phù hợp nhất)
+    # Best match
     if result["best_match"]:
-        price_text = ""
-        if result["best_match"].get("price") not in (None, ""):
-            try:
-                price_text = f"Giá: {int(float(result['best_match']['price'])):,} VND".replace(",", ".")
-            except Exception:
-                price_text = ""
-
         blocks += [
             {"type": "divider"},
             {"type": "info", "title": "Gợi ý phù hợp nhất", "subtitle": ""},
-            {
-                # ✅ Thumbnail gọn, không còn ảnh full
-                "type": "card",
-                "title": result["best_match"].get("name", ""),
-                "subtitle": price_text,
-                "image": { "src": { "rawUrl": result["best_match"].get("image_url") or "" } },
-                "actionLink": result["best_match"].get("url") or ""
-            },
-            {
-                "type": "chips",
-                "options": [
-                    { "text": "Xem chi tiết", "link": result["best_match"].get("url") or "" }
-                ]
-            }
+            {"type": "image", "rawUrl": result["best_match"].get("image_url") or "", "accessibilityText": title_best},
+            {"type": "info", "title": title_best, "subtitle": subtitle_best, "actionLink": result["best_match"].get("url") or ""},
+            {"type": "button", "icon": {"type": "launch", "color": "#FFFFFF"}, "text": "Xem chi tiết", "link": result["best_match"].get("url") or ""},
         ]
 
-    # Gói payload gửi lại cho Dialogflow Messenger
     payload = {"richContent": [blocks]} if blocks else None
 
     return {
